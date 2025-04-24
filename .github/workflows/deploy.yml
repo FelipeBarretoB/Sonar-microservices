@@ -1,0 +1,53 @@
+name: sonar-ansible-deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  ansible-deployment:
+    name: 'Ansible and selenium-test'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get app VM IP and create Ansible hosts.ini
+        id: get-ip
+        run: |
+          RESOURCE_GROUP="taller-rg"
+          VM_NAME_SONAR="Sonar-vm"
+
+          IP_SONAR=$(az vm list-ip-addresses --name "$VM_NAME_SONAR" --resource-group "$RESOURCE_GROUP" --query "[0].virtualMachine.network.publicIpAddresses[0].ipAddress" -o tsv)
+          echo "App VM IP: $IP"
+          echo "ip=$IP_SONAR" >> $GITHUB_OUTPUT
+
+          # Move into the Ansible folder
+          cd ansible
+
+          # Create the hosts.ini file in the ansible folder
+          cat <<EOF > hosts.ini
+          [my-vms]
+          sonar ansible_host=$IP_SONAR ansible_user=${{ secrets.TF_VAR_USERNAME }} ansible_password=${{ secrets.TF_VAR_PASSWORD }}
+
+
+      - name: Run Ansible Playbook from ansible folder
+        working-directory: ./ansible
+        run: |
+          cat hosts.ini
+          ansible-playbook -i hosts.ini playbook.yml
+      
+      # Build the Docker image
+      - name: Build Docker image
+        run: |
+         docker build -t selenium-test ./selenium-test
+
+      - name: Run Selenium Tests in Docker
+        run: |
+          docker run --rm -e APP_IP=${{ steps.get-ip.outputs.ip }} selenium-test
